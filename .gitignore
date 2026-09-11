@@ -23,6 +23,10 @@ test-results/
 # TypeScript build info
 *.tsbuildinfo
 
+# Vercel (generated static output + local tooling)
+public/
+.vercel/
+
 # Bundled source archives (local only)
 *.zip
 

@@ -7,8 +7,11 @@ import { env } from '../config/env';
  * Creates the admin account from environment variables (ADMIN_EMAIL / ADMIN_PASSWORD)
  * if it does not already exist. Idempotent and safe for production run at boot:
  * an existing admin's password is never overwritten.
+ *
+ * `disconnect` (default true) closes the mongoose connection afterwards — pass
+ * `false` on Vercel where a pre-existing connection must be kept alive.
  */
-export async function ensureAdmin(): Promise<void> {
+export async function ensureAdmin(disconnect = true): Promise<void> {
   if (!env.adminEmail || !env.adminPassword) {
     // eslint-disable-next-line no-console
     console.warn('[ensureAdmin] ADMIN_EMAIL / ADMIN_PASSWORD not set; skipping admin creation.');
@@ -28,7 +31,9 @@ export async function ensureAdmin(): Promise<void> {
     // eslint-disable-next-line no-console
     console.log(`[ensureAdmin] admin ready: ${env.adminEmail}`);
   } finally {
-    await disconnectDatabase();
+    if (disconnect) {
+      await disconnectDatabase();
+    }
   }
 }
 
