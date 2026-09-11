@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Environment files - NEVER commit secrets
+.env
+.env.*.local
+.env.save
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test results
+coverage/
+playwright-report/
+test-results/
+*.tmp
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Bundled source archives (local only)
+*.zip
+
+# Unrelated local folders
+ipl question/
+
+# OS
+.DS_Store

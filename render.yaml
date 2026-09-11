@@ -1,0 +1,40 @@
+# Render Blueprint — SWAP 2K26 Mobile Test Portal
+# Deploys a single Web Service that serves BOTH the Express API (/api)
+# and the built React frontend (static files from frontend/dist).
+# Same-origin serving keeps the HTTP-only auth cookie working with zero CORS issues.
+#
+# Deploy: https://render.com/new (connect this GitHub repo and choose this blueprint)
+# After first deploy, fill in the secret env vars (marked sync:false) in the Render dashboard.
+
+services:
+  - type: web
+    name: swap2k26-test-portal
+    runtime: node
+    plan: starter
+    rootDir: .
+    buildCommand: npm install --prefix backend && npm run build --prefix backend && npm install --prefix frontend && npm run build --prefix frontend
+    startCommand: npm start --prefix backend
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      - key: COOKIE_NAME
+        value: swap2k26_token
+      - key: TOKEN_TTL_HOURS
+        value: "6"
+      - key: SEED_CANDIDATES
+        value: "0"
+      # ── Secrets / service-specific — set in the Render dashboard after deploy ──
+      - key: MONGODB_URI
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: FRONTEND_URL
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
