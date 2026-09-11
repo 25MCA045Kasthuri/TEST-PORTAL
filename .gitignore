@@ -35,3 +35,5 @@ ipl question/
 
 # OS
 .DS_Store
+.vercel
+.env*
