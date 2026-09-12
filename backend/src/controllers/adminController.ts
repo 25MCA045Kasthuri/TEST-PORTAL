@@ -99,6 +99,20 @@ export const dashboard = asyncHandler(async (_req: AuthRequest, res: Response) =
   });
 });
 
+/**
+ * Reset Dashboard.
+ *
+ * Dashboard metrics are derived live from Candidates, Questions, ExamAttempts,
+ * MalpracticeLog and Settings. There is no dashboard-specific collection, cache or
+ * persistent state to delete, so this endpoint intentionally performs NO database
+ * mutation. It exists so the Dashboard reset follows the same admin-only UI/API
+ * pattern as the other list resets; the client clears its local view state and
+ * refetches freshly recalculated metrics.
+ */
+export const resetDashboard = asyncHandler(async (_req: AuthRequest, res: Response) => {
+  ok(res, { reset: true, derived: true }, 'Dashboard reset successfully.');
+});
+
 export const listCandidates = asyncHandler(async (req: AuthRequest, res: Response) => {
   const query = req.query as unknown as ListQuery;
   const { search, status } = query;

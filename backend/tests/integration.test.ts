@@ -942,4 +942,60 @@ describe('Result list reset', () => {
     expect((await request(app).delete('/api/admin/results/reset').set('Cookie', jar)).status).toBe(403);
   });
 });
+
+describe('Dashboard reset', () => {
+  it('resets without deleting candidates, questions, results or malpractice data', async () => {
+    await seedCandidate({ uid: 'SWAP2K260001' });
+    await seedCandidate({ uid: 'SWAP2K260002' });
+    const cands = await Candidate.find().sort({ uid: 1 }).lean();
+    await ExamAttempt.create({
+      candidate: cands[0]._id,
+      sessionId: 'dash-session-1',
+      startedAt: new Date(),
+      expiresAt: new Date(Date.now() + 60000),
+      submittedAt: new Date(),
+      status: 'SUBMITTED',
+      malpracticeStatus: 'NORMAL',
+      finalScore: 10,
+      rawScore: 10,
+      violationCount: 0,
+      durationUsed: 120,
+    });
+    await MalpracticeLog.create({
+      candidate: cands[1]._id,
+      eventType: 'COPY_ATTEMPT',
+      severity: 'MINOR',
+      sessionId: 'dash-session-1',
+    });
+
+    const jar = await adminLogin(app);
+    const before = await request(app).get('/api/admin/dashboard').set('Cookie', jar);
+    expect(before.body.data.registeredCandidates).toBe(2);
+
+    const res = await request(app).delete('/api/admin/dashboard/reset').set('Cookie', jar);
+    expect(res.status).toBe(200);
+    expect(res.body.data.derived).toBe(true);
+    expect(res.body.message).toBe('Dashboard reset successfully.');
+
+    expect(await Candidate.countDocuments()).toBe(2);
+    expect(await Question.countDocuments()).toBe(5);
+    expect(await ExamAttempt.countDocuments()).toBe(1);
+    expect(await MalpracticeLog.countDocuments()).toBe(1);
+
+    const after = await request(app).get('/api/admin/dashboard').set('Cookie', jar);
+    expect(after.body.data.registeredCandidates).toBe(2);
+    expect(after.body.data.completed).toBe(1);
+    expect(after.body.data.malpracticeFlags).toBe(1);
+  });
+
+  it('requires authentication', async () => {
+    expect((await request(app).delete('/api/admin/dashboard/reset')).status).toBe(401);
+  });
+
+  it('candidate cannot reset the dashboard', async () => {
+    await seedCandidate();
+    const jar = await candidateLogin(app);
+    expect((await request(app).delete('/api/admin/dashboard/reset').set('Cookie', jar)).status).toBe(403);
+  });
+});
 });

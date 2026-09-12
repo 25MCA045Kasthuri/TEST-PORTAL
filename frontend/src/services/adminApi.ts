@@ -16,6 +16,9 @@ import { api } from './api';
 
 export const getDashboard = () => api.get('/admin/dashboard').then((r) => r.data.data as DashboardData);
 
+export const resetDashboard = () =>
+  api.delete('/admin/dashboard/reset').then((r) => r.data.data as { reset: boolean; derived: boolean } | null);
+
 export const listCandidates = (params: { search?: string; page?: number; limit?: number }) =>
   api.get('/admin/candidates', { params }).then((r) => r.data.data as CandidateListResponse);
 

@@ -4,6 +4,7 @@ import { ApiError } from '../utils/ApiError';
 import { isValidExcelUpload } from '../utils/excelUpload';
 import {
   dashboard,
+  resetDashboard,
   listCandidates,
   createCandidate,
   importCandidates,
@@ -56,6 +57,7 @@ const upload = multer({
 router.use(requireAdmin);
 
 router.get('/dashboard', dashboard);
+router.delete('/dashboard/reset', resetDashboard);
 
 router.get('/candidates', listCandidates);
 router.post('/candidates', validate(createCandidateSchema), createCandidate);
