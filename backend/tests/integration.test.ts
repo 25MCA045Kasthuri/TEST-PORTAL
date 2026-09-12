@@ -998,4 +998,115 @@ describe('Dashboard reset', () => {
     expect((await request(app).delete('/api/admin/dashboard/reset').set('Cookie', jar)).status).toBe(403);
   });
 });
+
+describe('Dashboard statistics scoped to current candidates', () => {
+  it('shows all-zero cards after candidate reset even when historical attempts remain', async () => {
+    await seedCandidate({ uid: 'SWAP2K260001' });
+    await seedCandidate({ uid: 'SWAP2K260002' });
+    await seedCandidate({ uid: 'SWAP2K260003' });
+    const cands = await Candidate.find().sort({ uid: 1 }).lean();
+    await ExamAttempt.create([
+      {
+        candidate: cands[0]._id, sessionId: 'old-s1', startedAt: new Date(), expiresAt: new Date(), submittedAt: new Date(),
+        status: 'SUBMITTED', malpracticeStatus: 'NORMAL', finalScore: 1, rawScore: 1,
+      },
+      {
+        candidate: cands[1]._id, sessionId: 'old-s2', startedAt: new Date(), expiresAt: new Date(), submittedAt: new Date(),
+        status: 'SUBMITTED', malpracticeStatus: 'NORMAL', finalScore: 1, rawScore: 1,
+      },
+      {
+        candidate: cands[2]._id, sessionId: 'old-s3', startedAt: new Date(), expiresAt: new Date(), submittedAt: new Date(),
+        status: 'TERMINATED', malpracticeStatus: 'TERMINATED', finalScore: 0, rawScore: 0,
+      },
+    ]);
+    await MalpracticeLog.create({
+      candidate: cands[0]._id, eventType: 'COPY_ATTEMPT', severity: 'MINOR', sessionId: 'old-s1',
+    });
+
+    const jar = await adminLogin(app);
+    const before = await request(app).get('/api/admin/dashboard').set('Cookie', jar);
+    expect(before.body.data.registeredCandidates).toBe(3);
+    expect(before.body.data.completed).toBe(2);
+    expect(before.body.data.terminatedSessions).toBe(1);
+    expect(before.body.data.malpracticeFlags).toBe(1);
+
+    await request(app).delete('/api/admin/candidates/reset').set('Cookie', jar);
+
+    const after = await request(app).get('/api/admin/dashboard').set('Cookie', jar);
+    expect(after.body.data.registeredCandidates).toBe(0);
+    expect(after.body.data.notStarted).toBe(0);
+    expect(after.body.data.currentlyWriting).toBe(0);
+    expect(after.body.data.completed).toBe(0);
+    expect(after.body.data.malpracticeFlags).toBe(0);
+    expect(after.body.data.terminatedSessions).toBe(0);
+
+    expect(await ExamAttempt.countDocuments()).toBe(3);
+    expect(await MalpracticeLog.countDocuments()).toBe(1);
+    expect(await Candidate.countDocuments()).toBe(0);
+  });
+
+  it('reflects exam lifecycle of newly imported candidates without old historical attempts', async () => {
+    for (let i = 1; i <= 59; i++) {
+      await seedCandidate({ uid: `SWAP2K26${String(i).padStart(4, '0')}` });
+    }
+    const jar = await adminLogin(app);
+
+    const initial = await request(app).get('/api/admin/dashboard').set('Cookie', jar);
+    expect(initial.body.data.registeredCandidates).toBe(59);
+    expect(initial.body.data.notStarted).toBe(59);
+    expect(initial.body.data.currentlyWriting).toBe(0);
+    expect(initial.body.data.completed).toBe(0);
+    expect(initial.body.data.malpracticeFlags).toBe(0);
+    expect(initial.body.data.terminatedSessions).toBe(0);
+
+    const aJar = await candidateLogin(app, 'SWAP2K260001', 'Jmc0001');
+    await request(app).post('/api/exam/start').set('Cookie', aJar);
+    const afterStart = await request(app).get('/api/admin/dashboard').set('Cookie', jar);
+    expect(afterStart.body.data.currentlyWriting).toBe(1);
+    expect(afterStart.body.data.notStarted).toBe(58);
+    expect(afterStart.body.data.completed).toBe(0);
+
+    await request(app).post('/api/exam/submit').set('Cookie', aJar).send({ manual: true });
+    const afterSubmit = await request(app).get('/api/admin/dashboard').set('Cookie', jar);
+    expect(afterSubmit.body.data.currentlyWriting).toBe(0);
+    expect(afterSubmit.body.data.notStarted).toBe(58);
+    expect(afterSubmit.body.data.completed).toBe(1);
+    expect(afterSubmit.body.data.terminatedSessions).toBe(0);
+
+    const bJar = await candidateLogin(app, 'SWAP2K260002', 'Jmc0002');
+    await request(app).post('/api/exam/start').set('Cookie', bJar);
+    const bCandidate = await Candidate.findOne({ uid: 'SWAP2K260002' }).lean();
+    await ExamAttempt.updateOne(
+      { candidate: bCandidate!._id },
+      { $set: { status: 'TERMINATED', malpracticeStatus: 'TERMINATED', submittedAt: new Date() } },
+    );
+
+    const afterTerminated = await request(app).get('/api/admin/dashboard').set('Cookie', jar);
+    expect(afterTerminated.body.data.registeredCandidates).toBe(59);
+    expect(afterTerminated.body.data.notStarted).toBe(57);
+    expect(afterTerminated.body.data.currentlyWriting).toBe(0);
+    expect(afterTerminated.body.data.completed).toBe(1);
+    expect(afterTerminated.body.data.terminatedSessions).toBe(1);
+    expect(afterTerminated.body.data.malpracticeFlags).toBe(0);
+  });
+
+  it('does not count attempts of candidates whose new import got fresh ObjectIds', async () => {
+    await seedCandidate({ uid: 'SWAP2K260001' });
+    const cand = await Candidate.findOne({ uid: 'SWAP2K260001' }).lean();
+    await ExamAttempt.create({
+      candidate: cand!._id, sessionId: 'old-full', startedAt: new Date(), expiresAt: new Date(), submittedAt: new Date(),
+      status: 'SUBMITTED', malpracticeStatus: 'NORMAL', finalScore: 5, rawScore: 5,
+    });
+
+    const jar = await adminLogin(app);
+    await request(app).delete('/api/admin/candidates/reset').set('Cookie', jar);
+    await seedCandidate({ uid: 'SWAP2K260001' });
+
+    const res = await request(app).get('/api/admin/dashboard').set('Cookie', jar);
+    expect(res.body.data.registeredCandidates).toBe(1);
+    expect(res.body.data.completed).toBe(0);
+    expect(res.body.data.notStarted).toBe(1);
+    expect(await ExamAttempt.countDocuments()).toBe(1);
+  });
+});
 });

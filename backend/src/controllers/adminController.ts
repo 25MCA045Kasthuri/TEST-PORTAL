@@ -68,27 +68,43 @@ function pagination(query: ListQuery): { skip: number; limit: number; page: numb
 }
 
 export const dashboard = asyncHandler(async (_req: AuthRequest, res: Response) => {
-  const [registered, active, completed, settings, violationCount, terminated, activeQuestionCount] =
-    await Promise.all([
-      Candidate.countDocuments(),
-      ExamAttempt.countDocuments({ status: 'ACTIVE' }),
-      ExamAttempt.countDocuments({ status: { $in: ['SUBMITTED', 'TIMED_OUT', 'TERMINATED'] } }),
-      getSettings(),
-      MalpracticeLog.countDocuments({ eventType: { $ne: 'MULTIPLE_LOGIN_ATTEMPT' } }),
-      ExamAttempt.countDocuments({ status: 'TERMINATED' }),
-      Question.countDocuments({ active: true }),
-    ]);
+  const [settings, activeQuestionCount, currentCandidateIds] = await Promise.all([
+    getSettings(),
+    Question.countDocuments({ active: true }),
+    Candidate.distinct('_id'),
+  ]);
 
-  const distinctCandidates = await ExamAttempt.find().select('candidate').lean();
-  const notStarted = Math.max(0, registered - new Set(distinctCandidates.map((a) => String(a.candidate))).size);
+  const registered = currentCandidateIds.length;
+
+  let currentlyWriting = 0;
+  let completed = 0;
+  let malpracticeFlags = 0;
+  let terminatedSessions = 0;
+  let notStarted = 0;
+
+  if (registered > 0) {
+    const ids = currentCandidateIds;
+    const [active, finished, flags, terminatedAttempts, attendedIds] = await Promise.all([
+      ExamAttempt.countDocuments({ candidate: { $in: ids }, status: 'ACTIVE' }),
+      ExamAttempt.countDocuments({ candidate: { $in: ids }, status: { $in: ['SUBMITTED', 'TIMED_OUT'] } }),
+      MalpracticeLog.countDocuments({ candidate: { $in: ids }, eventType: { $ne: 'MULTIPLE_LOGIN_ATTEMPT' } }),
+      ExamAttempt.countDocuments({ candidate: { $in: ids }, status: 'TERMINATED' }),
+      ExamAttempt.distinct('candidate', { candidate: { $in: ids } }),
+    ]);
+    currentlyWriting = active;
+    completed = finished;
+    malpracticeFlags = flags;
+    terminatedSessions = terminatedAttempts;
+    notStarted = Math.max(0, registered - attendedIds.length);
+  }
 
   ok(res, {
     registeredCandidates: registered,
     notStarted,
-    currentlyWriting: active,
+    currentlyWriting,
     completed,
-    malpracticeFlags: violationCount,
-    terminatedSessions: terminated,
+    malpracticeFlags,
+    terminatedSessions,
     activeQuestionCount,
     settings: {
       examTitle: settings.examTitle,
