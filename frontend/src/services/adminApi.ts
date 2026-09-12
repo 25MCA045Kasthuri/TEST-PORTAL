@@ -79,6 +79,9 @@ export const listResults = (params: { search?: string; status?: string; sort?: R
 
 export const exportResultsUrl = '/api/admin/results/export';
 
+export const resetResultList = () =>
+  api.delete('/admin/results/reset').then((r) => r.data.data as { cleared: number } | null);
+
 export const listMalpractice = (params: { page?: number; limit?: number }) =>
   api.get('/admin/malpractice', { params }).then((r) => r.data.data as MalpracticeListResponse);
 

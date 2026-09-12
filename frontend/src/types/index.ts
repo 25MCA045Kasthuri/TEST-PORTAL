@@ -65,6 +65,7 @@ export interface AttemptDto {
   remainingSeconds: number;
   answeredCount: number;
   violationCount: number;
+  minorViolationCount?: number;
   malpracticeStatus: MalpracticeStatus;
   lastQuestionNumber: number;
   submittedAt: string | null;
@@ -90,9 +91,12 @@ export interface QuestionsResponse {
 
 export interface ViolationResponse {
   acknowledged: boolean;
+  status?: string;
   violationCount?: number;
+  minorViolationCount?: number;
   malpracticeStatus?: MalpracticeStatus;
   terminated?: boolean;
+  terminate?: boolean;
   applied?: boolean;
   message?: string;
 }
@@ -214,7 +218,12 @@ export interface ResultsResponse extends Paginated<ResultRow> {
 export interface MalpracticeLogRow {
   _id: string;
   candidate: { _id: string; uid: string; name: string; mobile: string };
-  attempt?: string | { _id: string } | null;
+  attempt?: {
+    _id: string;
+    minorViolationCount?: number;
+    status?: ExamState;
+    malpracticeStatus?: MalpracticeStatus;
+  } | null;
   eventType: MalpracticeEvent;
   questionNumber: number | null;
   severity: 'MAJOR' | 'MINOR';

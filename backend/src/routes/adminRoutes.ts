@@ -20,6 +20,7 @@ import {
   resetQuestionList,
   listResults,
   exportResults,
+  resetResultList,
   listMalpractice,
   updateMalpractice,
   resetMalpracticeList,
@@ -74,6 +75,7 @@ router.delete('/questions/:id', deleteQuestion);
 
 router.get('/results', listResults);
 router.get('/results/export', exportResults);
+router.delete('/results/reset', resetResultList);
 
 router.get('/malpractice', listMalpractice);
 router.delete('/malpractice/reset', resetMalpracticeList);

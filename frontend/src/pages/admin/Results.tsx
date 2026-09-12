@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { exportResultsUrl, listResults, type ResultsSortKey } from '../../services/adminApi';
+import { exportResultsUrl, listResults, resetResultList, type ResultsSortKey } from '../../services/adminApi';
 import { toApiFailure } from '../../services/api';
-import { Alert, Badge, Button, Card, EmptyState, Input, PageLoader, Select, StatCard } from '../../components/ui';
+import { Alert, Badge, Button, Card, EmptyState, Input, Modal, PageLoader, Select, StatCard } from '../../components/ui';
 import { fmtDateTime, fmtSeconds } from '../../utils/cn';
 import type { MalpracticeStatus, ResultsSummary, ResultRow } from '../../types';
 
@@ -45,6 +45,11 @@ export default function Results() {
   const [sort, setSort] = useState<ResultsSortKey>('default');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
+
+  const [resetModalOpen, setResetModalOpen] = useState(false);
+  const [resetConfirm, setResetConfirm] = useState('');
+  const [resetting, setResetting] = useState(false);
 
   const load = useCallback(
     async (p = page, s = search, st = status, so = sort) => {
@@ -82,6 +87,26 @@ export default function Results() {
     await load(1, search, status, sort);
   }
 
+  async function handleResetList() {
+    if (resetConfirm !== 'RESET RESULTS') return;
+    setResetting(true);
+    setError('');
+    try {
+      await resetResultList();
+      setResetModalOpen(false);
+      setResetConfirm('');
+      setSearch('');
+      setStatus('');
+      setSort('default');
+      setNotice('Result list reset successfully.');
+      await load(1, '', '', 'default');
+    } catch (e) {
+      setError(toApiFailure(e).message);
+    } finally {
+      setResetting(false);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -93,12 +118,18 @@ export default function Results() {
             {total} participant{total === 1 ? '' : 's'} shown
           </p>
         </div>
-        <a href={exportResultsUrl}>
-          <Button variant="success">⬇ Export Excel</Button>
-        </a>
+        <div className="flex gap-2">
+          <a href={exportResultsUrl}>
+            <Button variant="success">⬇ Export Excel</Button>
+          </a>
+          <Button variant="danger" onClick={() => setResetModalOpen(true)}>
+            Reset Result List
+          </Button>
+        </div>
       </div>
 
       {error && <Alert>{error}</Alert>}
+      {notice && <Alert kind="success">{notice}</Alert>}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {summaryCards(summary).map((c) => (
@@ -199,6 +230,40 @@ export default function Results() {
           </div>
         )}
       </Card>
+
+      {resetModalOpen && (
+        <Modal title="Reset Result List?" onClose={() => !resetting && setResetModalOpen(false)}>
+          <div className="space-y-4">
+            <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+              This will clear all current examination result records.
+              <br />
+              <b>This action cannot be undone.</b>
+            </div>
+            <p className="text-sm text-slate-600">
+              Type <b>RESET RESULTS</b> to confirm.
+            </p>
+            <Input
+              value={resetConfirm}
+              placeholder="RESET RESULTS"
+              onChange={(e) => setResetConfirm(e.target.value)}
+              autoCapitalize="characters"
+            />
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="secondary" onClick={() => setResetModalOpen(false)} disabled={resetting}>
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                loading={resetting}
+                disabled={resetConfirm !== 'RESET RESULTS'}
+                onClick={handleResetList}
+              >
+                Reset Result List
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

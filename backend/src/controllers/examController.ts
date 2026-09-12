@@ -2,7 +2,13 @@ import { Request, Response } from 'express';
 import crypto from 'crypto';
 import { ExamAttempt, ExamAttemptDoc, MalpracticeStatus } from '../models/ExamAttempt';
 import { Question, OptionKey } from '../models/Question';
-import { MalpracticeLog, MAJOR_EVENTS, MalpracticeEvent } from '../models/MalpracticeLog';
+import {
+  MalpracticeLog,
+  MAJOR_EVENTS,
+  MINOR_VIOLATION_EVENTS,
+  MINOR_VIOLATION_LIMIT,
+  MalpracticeEvent,
+} from '../models/MalpracticeLog';
 import { getSettings } from '../models/Settings';
 import { asyncHandler } from '../utils/asyncHandler';
 import { ok } from '../utils/respond';
@@ -12,6 +18,9 @@ import { calculateScore } from '../services/scoreService';
 import { AnswerInput, ViolationInput } from '../validators/examValidators';
 
 interface AuthRequest extends Request {}
+
+/** Debounce window for identical minor events that fire together (keydown + copy etc.). */
+const MINOR_VIOLATION_DEBOUNCE_MS = 2000;
 
 function nowMs(): number {
   return Date.now();
@@ -109,6 +118,7 @@ export const startExam = asyncHandler(async (req: AuthRequest, res: Response) =>
     answeredCount: 0,
     lastQuestionNumber: 1,
     violationCount: 0,
+    minorViolationCount: 0,
     malpracticeStatus: 'NORMAL',
     correctAnswers: 0,
     wrongAnswers: 0,
@@ -240,6 +250,7 @@ export const recordViolation = asyncHandler(async (req: AuthRequest, res: Respon
 
   const isMajor = MAJOR_EVENTS.includes(eventType as MalpracticeEvent);
   const severity = isMajor ? 'MAJOR' : 'MINOR';
+  const isCountedMinor = !isMajor && MINOR_VIOLATION_EVENTS.includes(eventType as MalpracticeEvent);
 
   let newStatus: MalpracticeStatus = attempt.malpracticeStatus;
   let autoTerminated = false;
@@ -263,6 +274,28 @@ export const recordViolation = asyncHandler(async (req: AuthRequest, res: Respon
         newStatus = 'SUSPECTED';
       }
     }
+  } else if (isCountedMinor) {
+    const lastMinor = await MalpracticeLog.findOne({
+      attempt: attempt._id,
+      eventType: eventType as MalpracticeEvent,
+    }).sort({ timestamp: -1 });
+    const recentMinor = Boolean(
+      lastMinor && now - new Date(lastMinor.timestamp).getTime() < MINOR_VIOLATION_DEBOUNCE_MS,
+    );
+    const duplicateMinor = Boolean((metadata as { duplicate?: boolean })?.duplicate === true || recentMinor);
+
+    if (!duplicateMinor) {
+      attempt.minorViolationCount += 1;
+      violationApplied = true;
+      if (attempt.minorViolationCount >= MINOR_VIOLATION_LIMIT) {
+        newStatus = 'TERMINATED';
+        autoTerminated = true;
+      } else if (attempt.malpracticeStatus === 'SUSPECTED' || attempt.malpracticeStatus === 'CONFIRMED') {
+        newStatus = attempt.malpracticeStatus;
+      } else {
+        newStatus = attempt.minorViolationCount >= 2 ? 'SUSPECTED' : 'WARNING';
+      }
+    }
   } else if (attempt.malpracticeStatus === 'NORMAL') {
     attempt.malpracticeStatus = 'WARNING';
   }
@@ -275,18 +308,22 @@ export const recordViolation = asyncHandler(async (req: AuthRequest, res: Respon
     sessionId: attempt.sessionId,
     severity,
     userAgent: req.headers['user-agent'] ?? '',
-    metadata,
+    metadata: autoTerminated ? { ...metadata, autoTerminated: true, reason: 'Three minor violations' } : metadata,
   });
 
   if (autoTerminated) {
     const finalized = await finalizeAttempt(attempt, false, 'TERMINATED');
     ok(res, {
       acknowledged: true,
-      violationCount: finalized ? finalized.violationCount : attempt.violationCount,
       status: 'TERMINATED',
-      malpracticeStatus: 'TERMINATED',
+      minorViolationCount: attempt.minorViolationCount,
+      terminate: true,
       terminated: true,
-      message: 'Maximum violations reached. Your examination has been automatically submitted.',
+      violationCount: finalized ? finalized.violationCount : attempt.violationCount,
+      malpracticeStatus: 'TERMINATED',
+      message: isCountedMinor
+        ? 'Your examination has been terminated because three minor violations were detected.'
+        : 'Maximum violations reached. Your examination has been automatically submitted.',
     });
     return;
   }
@@ -296,10 +333,18 @@ export const recordViolation = asyncHandler(async (req: AuthRequest, res: Respon
 
   ok(res, {
     acknowledged: true,
+    status: isCountedMinor ? 'WARNING' : attempt.malpracticeStatus,
+    minorViolationCount: attempt.minorViolationCount,
+    terminate: false,
+    terminated: false,
     violationCount: attempt.violationCount,
     malpracticeStatus: attempt.malpracticeStatus,
     violationApplied,
-    terminated: false,
+    message: isCountedMinor
+      ? attempt.minorViolationCount >= 2
+        ? 'Warning 2 of 3: One more minor violation will terminate your examination.'
+        : 'Warning 1 of 3: This action is not allowed during the examination.'
+      : undefined,
   }, 'Event recorded.');
 });
 
@@ -359,6 +404,7 @@ async function buildAttemptDto(attempt: ExamAttemptDoc): Promise<Record<string, 
     remainingSeconds,
     answeredCount: attempt.answeredCount,
     violationCount: attempt.violationCount,
+    minorViolationCount: attempt.minorViolationCount,
     malpracticeStatus: attempt.malpracticeStatus,
     lastQuestionNumber: attempt.lastQuestionNumber,
     submittedAt: attempt.submittedAt ?? null,

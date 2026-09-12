@@ -16,6 +16,23 @@ export type MalpracticeEvent = (typeof MALPRACTICE_EVENTS)[number];
 
 export const MAJOR_EVENTS: MalpracticeEvent[] = ['TAB_SWITCH', 'FULLSCREEN_EXIT', 'MULTIPLE_LOGIN_ATTEMPT'];
 
+/**
+ * Minor events that count toward the 3-minor-violation automatic termination.
+ *
+ * WINDOW_BLUR is intentionally excluded: a tab switch fires both TAB_SWITCH
+ * (major) and WINDOW_BLUR together, so counting WINDOW_BLUR here would double-
+ * count the same user action.
+ */
+export const MINOR_VIOLATION_EVENTS: MalpracticeEvent[] = [
+  'COPY_ATTEMPT',
+  'PASTE_ATTEMPT',
+  'CUT_ATTEMPT',
+  'CONTEXT_MENU_ATTEMPT',
+  'SHORTCUT_ATTEMPT',
+];
+
+export const MINOR_VIOLATION_LIMIT = 3;
+
 export interface MalpracticeLogDoc extends Document {
   candidate: Types.ObjectId;
   attempt?: Types.ObjectId | null;

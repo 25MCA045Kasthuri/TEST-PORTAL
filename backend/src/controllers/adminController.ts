@@ -396,6 +396,29 @@ export const resetQuestionList = asyncHandler(async (_req: AuthRequest, res: Res
   const result = await Question.deleteMany({});
   ok(res, { deleted: result.deletedCount }, 'Question list reset successfully.');
 });
+
+export const resetResultList = asyncHandler(async (_req: AuthRequest, res: Response) => {
+  const activeCount = await ExamAttempt.countDocuments({ status: 'ACTIVE' });
+  if (activeCount > 0) {
+    throw ApiError.badRequest('Results cannot be reset while an examination is active.');
+  }
+  const result = await ExamAttempt.updateMany(
+    { status: { $in: [...FINALIZED_STATUSES] } },
+    {
+      $set: {
+        resultCleared: true,
+        rawScore: 0,
+        finalScore: 0,
+        correctAnswers: 0,
+        wrongAnswers: 0,
+        unanswered: 0,
+        durationUsed: 0,
+        submittedAt: null,
+      },
+    },
+  );
+  ok(res, { cleared: result.modifiedCount }, 'Result list reset successfully.');
+});
 export const listResults = asyncHandler(async (req: AuthRequest, res: Response) => {
   const query = req.query as unknown as ListQuery;
   const { search, status } = query;
@@ -404,7 +427,7 @@ export const listResults = asyncHandler(async (req: AuthRequest, res: Response) 
     ? query.sort
     : 'default') as ResultSortKey;
 
-  const attemptFilter: Record<string, unknown> = { status: { $in: [...FINALIZED_STATUSES] } };
+  const attemptFilter: Record<string, unknown> = { status: { $in: [...FINALIZED_STATUSES] }, resultCleared: { $ne: true } };
   if (status) attemptFilter.status = status;
 
   if (search && search.trim()) {
@@ -458,7 +481,7 @@ export const listResults = asyncHandler(async (req: AuthRequest, res: Response) 
 
   const [totalRegistered, attendedIds, settings] = await Promise.all([
     Candidate.countDocuments(),
-    ExamAttempt.distinct('candidate'),
+    ExamAttempt.distinct('candidate', { resultCleared: { $ne: true } }),
     getSettings(),
   ]);
   const topScoreMax = settings.totalQuestions * settings.marksPerCorrect;
@@ -480,7 +503,10 @@ export const listResults = asyncHandler(async (req: AuthRequest, res: Response) 
 });
 
 export const exportResults = asyncHandler(async (_req: AuthRequest, res: Response) => {
-  const attempts = await ExamAttempt.find({ status: { $in: [...FINALIZED_STATUSES] } })
+  const attempts = await ExamAttempt.find({
+    status: { $in: [...FINALIZED_STATUSES] },
+    resultCleared: { $ne: true },
+  })
     .sort({ submittedAt: -1, createdAt: -1 })
     .lean();
   const finalAttempts = latestAttemptPerCandidate(attempts.map(toFinalAttempt));
@@ -524,6 +550,7 @@ export const listMalpractice = asyncHandler(async (req: AuthRequest, res: Respon
   const { skip, limit, page } = pagination(req.query as unknown as ListQuery);
   const logs = await MalpracticeLog.find()
     .populate('candidate', 'uid name mobile')
+    .populate('attempt', 'minorViolationCount status malpracticeStatus')
     .sort({ timestamp: -1 })
     .skip(skip)
     .limit(limit)

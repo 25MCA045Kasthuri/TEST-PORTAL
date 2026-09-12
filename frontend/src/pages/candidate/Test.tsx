@@ -117,8 +117,11 @@ export default function Test() {
       try {
         const res = await reportViolation(type, undefined, { duplicate });
         if (res.terminated) {
-          alert('Maximum violations reached. Your examination has been terminated.');
+          alert(res.message ?? 'Your examination has been terminated.');
           navigate('/submitted', { replace: true });
+        } else if (res.message) {
+          setBanner(res.message);
+          setTimeout(() => setBanner(''), 5000);
         } else if (type === 'TAB_SWITCH' || type === 'FULLSCREEN_EXIT') {
           setBanner(
             `Warning: ${type === 'TAB_SWITCH' ? 'tab switch' : 'leaving fullscreen'} recorded (violation ${res.violationCount ?? '—'}).`,

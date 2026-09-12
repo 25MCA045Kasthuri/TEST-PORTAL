@@ -23,6 +23,7 @@ export interface ExamAttemptDoc extends Document {
   answeredCount: number;
   lastQuestionNumber: number;
   violationCount: number;
+  minorViolationCount: number;
   malpracticeStatus: MalpracticeStatus;
   correctAnswers: number;
   wrongAnswers: number;
@@ -30,6 +31,7 @@ export interface ExamAttemptDoc extends Document {
   rawScore: number;
   finalScore: number;
   durationUsed: number;
+  resultCleared: boolean;
   userAgent: string;
   createdAt: Date;
   updatedAt: Date;
@@ -63,6 +65,7 @@ const attemptSchema = new Schema<ExamAttemptDoc>(
     answeredCount: { type: Number, default: 0 },
     lastQuestionNumber: { type: Number, default: 1 },
     violationCount: { type: Number, default: 0 },
+    minorViolationCount: { type: Number, default: 0 },
     malpracticeStatus: {
       type: String,
       enum: ['NORMAL', 'WARNING', 'SUSPECTED', 'CONFIRMED', 'TERMINATED'],
@@ -74,6 +77,7 @@ const attemptSchema = new Schema<ExamAttemptDoc>(
     rawScore: { type: Number, default: 0 },
     finalScore: { type: Number, default: 0 },
     durationUsed: { type: Number, default: 0 },
+    resultCleared: { type: Boolean, default: false, index: true },
     userAgent: { type: String, default: '' },
   },
   { timestamps: true },

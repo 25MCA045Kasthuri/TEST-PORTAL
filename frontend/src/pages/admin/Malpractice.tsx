@@ -90,13 +90,15 @@ export default function Malpractice() {
           <EmptyState title="No malpractice events recorded" hint="Violations reported by candidates appear here in real time." />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[860px] text-sm">
+            <table className="w-full min-w-[1000px] text-sm">
               <thead>
                 <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wide text-slate-400">
                   <th className="px-4 py-3">Time</th>
                   <th className="px-4 py-3">Candidate</th>
                   <th className="px-4 py-3">Event</th>
                   <th className="px-4 py-3">Severity</th>
+                  <th className="px-4 py-3">Minor</th>
+                  <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Q#</th>
                   <th className="px-4 py-3">User agent</th>
                   <th className="px-4 py-3">Actions</th>
@@ -105,8 +107,20 @@ export default function Malpractice() {
               <tbody className="divide-y divide-slate-50">
                 {rows.map((log) => {
                   const attemptId = typeof log.attempt === 'string' ? log.attempt : log.attempt?._id;
+                  const attemptObj = typeof log.attempt === 'object' && log.attempt !== null ? log.attempt : null;
                   const name = log.candidate?.name ?? 'Unknown';
                   const uid = log.candidate?.uid ?? '—';
+                  const minorCount = attemptObj?.minorViolationCount ?? log.metadata?.minorViolationCount;
+                  const displayStatus =
+                    attemptObj?.malpracticeStatus && attemptObj.malpracticeStatus !== 'NORMAL'
+                      ? attemptObj.malpracticeStatus
+                      : attemptObj?.status ?? null;
+                  const statusKind =
+                    displayStatus === 'CONFIRMED' || displayStatus === 'TERMINATED'
+                      ? 'red'
+                      : displayStatus === 'WARNING' || displayStatus === 'SUSPECTED'
+                        ? 'amber'
+                        : 'slate';
                   return (
                     <tr key={log._id} className="hover:bg-slate-50/60">
                       <td className="px-4 py-3 text-xs text-slate-500">{fmtDateTime(log.timestamp)}</td>
@@ -116,6 +130,10 @@ export default function Malpractice() {
                       </td>
                       <td className="px-4 py-3 text-xs font-bold text-slate-700">{log.eventType.replace(/_/g, ' ')}</td>
                       <td className="px-4 py-3">{severityBadge(log.severity)}</td>
+                      <td className="px-4 py-3 text-xs">{typeof minorCount === 'number' ? minorCount : '—'}</td>
+                      <td className="px-4 py-3">
+                        {displayStatus ? <Badge kind={statusKind}>{displayStatus.replace(/_/g, ' ')}</Badge> : <span className="text-slate-300">—</span>}
+                      </td>
                       <td className="px-4 py-3 text-xs">{log.questionNumber ?? '—'}</td>
                       <td className="max-w-[180px] truncate px-4 py-3 text-[11px] text-slate-400">{log.userAgent || '—'}</td>
                       <td className="px-4 py-3">

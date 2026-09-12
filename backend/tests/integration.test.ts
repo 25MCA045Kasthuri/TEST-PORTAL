@@ -199,6 +199,91 @@ describe('Malpractice', () => {
     expect(db!.finalScore).toBe(0);
   });
 
+  it('counts minor violations 1 and 2 as warnings without terminating', async () => {
+    await seedCandidate();
+    const jar = await candidateLogin(app);
+    await request(app).post('/api/exam/start').set('Cookie', jar);
+
+    const first = await request(app).post('/api/exam/violation').set('Cookie', jar).send({ eventType: 'COPY_ATTEMPT', questionNumber: 1, metadata: {} });
+    expect(first.body.data.minorViolationCount).toBe(1);
+    expect(first.body.data.status).toBe('WARNING');
+    expect(first.body.data.terminated).toBe(false);
+    expect(first.body.data.message).toMatch(/Warning 1 of 3/);
+
+    const second = await request(app).post('/api/exam/violation').set('Cookie', jar).send({ eventType: 'PASTE_ATTEMPT', questionNumber: 2, metadata: {} });
+    expect(second.body.data.minorViolationCount).toBe(2);
+    expect(second.body.data.status).toBe('WARNING');
+    expect(second.body.data.terminated).toBe(false);
+    expect(second.body.data.message).toMatch(/Warning 2 of 3/);
+
+    const db = await ExamAttempt.findOne({});
+    expect(db!.status).toBe('ACTIVE');
+    expect(db!.minorViolationCount).toBe(2);
+  });
+
+  it('terminates the exam at the third minor violation and preserves saved answers', async () => {
+    await seedCandidate();
+    const jar = await candidateLogin(app);
+    await request(app).post('/api/exam/start').set('Cookie', jar);
+    const qs = await request(app).get('/api/exam/questions').set('Cookie', jar);
+    const q = qs.body.data.questions[0];
+    await request(app).put('/api/exam/answer').set('Cookie', jar).send({ questionId: q._id, selectedAnswer: 'B', questionNumber: q.questionNumber, clear: false });
+
+    await request(app).post('/api/exam/violation').set('Cookie', jar).send({ eventType: 'COPY_ATTEMPT', questionNumber: 1, metadata: {} });
+    await request(app).post('/api/exam/violation').set('Cookie', jar).send({ eventType: 'PASTE_ATTEMPT', questionNumber: 2, metadata: {} });
+    const res = await request(app).post('/api/exam/violation').set('Cookie', jar).send({ eventType: 'CUT_ATTEMPT', questionNumber: 3, metadata: {} });
+
+    expect(res.body.data.terminated).toBe(true);
+    expect(res.body.data.status).toBe('TERMINATED');
+    expect(res.body.data.minorViolationCount).toBe(3);
+    expect(res.body.data.message).toMatch(/terminated because three minor violations/);
+
+    const db = await ExamAttempt.findOne({});
+    expect(db!.status).toBe('TERMINATED');
+    expect(db!.malpracticeStatus).toBe('TERMINATED');
+    expect(db!.minorViolationCount).toBe(3);
+    expect(db!.answeredCount).toBe(1);
+    expect(db!.answers.find((a: { question: string }) => String(a.question) === String(q._id))?.selectedAnswer).toBe('B');
+
+    const lastLog = await MalpracticeLog.findOne({ eventType: 'CUT_ATTEMPT' }).lean();
+    expect(lastLog!.metadata).toMatchObject({ autoTerminated: true, reason: 'Three minor violations' });
+  });
+
+  it('counts duplicate firings of the same minor event only once', async () => {
+    await seedCandidate();
+    const jar = await candidateLogin(app);
+    await request(app).post('/api/exam/start').set('Cookie', jar);
+    const first = await request(app).post('/api/exam/violation').set('Cookie', jar).send({ eventType: 'CONTEXT_MENU_ATTEMPT', questionNumber: 1, metadata: {} });
+    expect(first.body.data.minorViolationCount).toBe(1);
+    const dup = await request(app).post('/api/exam/violation').set('Cookie', jar).send({ eventType: 'CONTEXT_MENU_ATTEMPT', questionNumber: 1, metadata: {} });
+    expect(dup.body.data.minorViolationCount).toBe(1);
+    expect(await ExamAttempt.findOne({})).toMatchObject({ minorViolationCount: 1, status: 'ACTIVE' });
+  });
+
+  it('does not treat 2 minor + 1 major as three minor violations', async () => {
+    await seedCandidate();
+    const jar = await candidateLogin(app);
+    await request(app).post('/api/exam/start').set('Cookie', jar);
+    await request(app).post('/api/exam/violation').set('Cookie', jar).send({ eventType: 'COPY_ATTEMPT', questionNumber: 1, metadata: {} });
+    await request(app).post('/api/exam/violation').set('Cookie', jar).send({ eventType: 'PASTE_ATTEMPT', questionNumber: 2, metadata: {} });
+    const major = await request(app).post('/api/exam/violation').set('Cookie', jar).send({ eventType: 'TAB_SWITCH', questionNumber: 3, metadata: {} });
+    expect(major.body.data.terminated).toBe(false);
+    const db = await ExamAttempt.findOne({});
+    expect(db!.minorViolationCount).toBe(2);
+    expect(db!.violationCount).toBe(1);
+    expect(db!.status).toBe('ACTIVE');
+  });
+
+  it('WINDOW_BLUR does not increment the minor violation counter', async () => {
+    await seedCandidate();
+    const jar = await candidateLogin(app);
+    await request(app).post('/api/exam/start').set('Cookie', jar);
+    const res = await request(app).post('/api/exam/violation').set('Cookie', jar).send({ eventType: 'WINDOW_BLUR', questionNumber: 1, metadata: {} });
+    expect(res.body.data.minorViolationCount).toBe(0);
+    expect(res.body.data.terminated).toBe(false);
+    expect((await ExamAttempt.findOne({}))!.status).toBe('ACTIVE');
+  });
+
   it('prevents duplicate active exam (multiple login protection)', async () => {
     await seedCandidate();
     const jar = await candidateLogin(app);
@@ -761,6 +846,100 @@ describe('Candidate & Question import/reset', () => {
       expect((await request(app).delete('/api/admin/questions/reset').set('Cookie', jar)).status).toBe(403);
       expect((await request(app).delete('/api/admin/candidates/reset').set('Cookie', jar)).status).toBe(403);
     });
+  });
+});
+
+describe('Result list reset', () => {
+  async function mkFinalized(candidateId: unknown, partial: Record<string, unknown> = {}) {
+    return ExamAttempt.create({
+      candidate: candidateId,
+      sessionId: 'session-' + Math.random().toString(36).slice(2),
+      startedAt: new Date(),
+      expiresAt: new Date(),
+      submittedAt: new Date(),
+      status: 'SUBMITTED',
+      malpracticeStatus: 'NORMAL',
+      finalScore: 25,
+      rawScore: 25,
+      durationUsed: 300,
+      correctAnswers: 25,
+      wrongAnswers: 0,
+      unanswered: 0,
+      violationCount: 0,
+      ...partial,
+    });
+  }
+
+  it('clears results but keeps candidates, questions, admin and settings intact', async () => {
+    await seedCandidate({ uid: 'SWAP2K260001' });
+    await seedCandidate({ uid: 'SWAP2K260002' });
+    const cands = await Candidate.find().sort({ uid: 1 }).lean();
+    await mkFinalized(cands[0]._id);
+    await mkFinalized(cands[1]._id, { status: 'TIMED_OUT' });
+
+    const jar = await adminLogin(app);
+    expect((await request(app).get('/api/admin/results').set('Cookie', jar)).body.data.total).toBe(2);
+
+    const res = await request(app).delete('/api/admin/results/reset').set('Cookie', jar);
+    expect(res.status).toBe(200);
+    expect(res.body.data.cleared).toBe(2);
+    expect(res.body.message).toBe('Result list reset successfully.');
+
+    const results = await request(app).get('/api/admin/results').set('Cookie', jar);
+    expect(results.body.data.total).toBe(0);
+    expect(results.body.data.results).toHaveLength(0);
+    expect(results.body.data.summary.attended).toBe(0);
+
+    expect(await Candidate.countDocuments()).toBe(2);
+    expect(await Question.countDocuments()).toBe(5);
+    expect(await Admin.countDocuments()).toBe(1);
+    expect((await getSettings()).examTitle).toBeDefined();
+  });
+
+  it('does not delete the attempt; only result fields are cleared and answers are preserved', async () => {
+    await seedCandidate();
+    const jar = await candidateLogin(app);
+    await request(app).post('/api/exam/start').set('Cookie', jar);
+    const qs = await request(app).get('/api/exam/questions').set('Cookie', jar);
+    const q = qs.body.data.questions[0];
+    await request(app).put('/api/exam/answer').set('Cookie', jar).send({ questionId: q._id, selectedAnswer: 'A', questionNumber: q.questionNumber, clear: false });
+    await request(app).post('/api/exam/submit').set('Cookie', jar).send({ manual: true });
+
+    const before = await ExamAttempt.findOne({});
+    const startedAt = new Date(before!.startedAt).getTime();
+    expect(before!.rawScore).toBe(1);
+
+    const adminJar = await adminLogin(app);
+    await request(app).delete('/api/admin/results/reset').set('Cookie', adminJar);
+
+    const after = await ExamAttempt.findById(before!._id);
+    expect(after).not.toBeNull();
+    expect(after!.resultCleared).toBe(true);
+    expect(after!.rawScore).toBe(0);
+    expect(after!.finalScore).toBe(0);
+    expect(after!.correctAnswers).toBe(0);
+    expect(after!.durationUsed).toBe(0);
+    expect(after!.submittedAt).toBeNull();
+    expect(new Date(after!.startedAt).getTime()).toBe(startedAt);
+    expect(after!.answers.find((a: { question: string }) => String(a.question) === String(q._id))?.selectedAnswer).toBe('A');
+    expect(after!.status).toBe('SUBMITTED');
+  });
+
+  it('blocks result reset while an examination is active', async () => {
+    await seedCandidate();
+    const jar = await candidateLogin(app);
+    await request(app).post('/api/exam/start').set('Cookie', jar);
+    const adminJar = await adminLogin(app);
+    const res = await request(app).delete('/api/admin/results/reset').set('Cookie', adminJar);
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/Results cannot be reset while an examination is active/i);
+    expect(await ExamAttempt.countDocuments({ status: 'ACTIVE' })).toBe(1);
+  });
+
+  it('candidate cannot reset the result list', async () => {
+    await seedCandidate();
+    const jar = await candidateLogin(app);
+    expect((await request(app).delete('/api/admin/results/reset').set('Cookie', jar)).status).toBe(403);
   });
 });
 });
