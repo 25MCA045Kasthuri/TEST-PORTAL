@@ -9,6 +9,8 @@ export const MALPRACTICE_EVENTS = [
   'CUT_ATTEMPT',
   'CONTEXT_MENU_ATTEMPT',
   'SHORTCUT_ATTEMPT',
+  'EXAM_SCREEN_HIDDEN',
+  'NAVIGATION_ATTEMPT',
   'MULTIPLE_LOGIN_ATTEMPT',
 ] as const;
 
@@ -19,17 +21,29 @@ export const MAJOR_EVENTS: MalpracticeEvent[] = ['TAB_SWITCH', 'FULLSCREEN_EXIT'
 /**
  * Minor events that count toward the 3-minor-violation automatic termination.
  *
- * WINDOW_BLUR is intentionally excluded: a tab switch fires both TAB_SWITCH
- * (major) and WINDOW_BLUR together, so counting WINDOW_BLUR here would double-
- * count the same user action.
+ * The API counts each physical action once. EXAM_SCREEN_HIDDEN and WINDOW_BLUR
+ * belong to the same "screen leave" family (Home/app-switch on mobile, window
+ * blur on desktop) and are deduplicated against each other (see
+ * SCREEN_LEAVE_FAMILY) so one action never produces more than one violation.
  */
 export const MINOR_VIOLATION_EVENTS: MalpracticeEvent[] = [
+  'WINDOW_BLUR',
+  'EXAM_SCREEN_HIDDEN',
+  'NAVIGATION_ATTEMPT',
   'COPY_ATTEMPT',
   'PASTE_ATTEMPT',
   'CUT_ATTEMPT',
   'CONTEXT_MENU_ATTEMPT',
   'SHORTCUT_ATTEMPT',
 ];
+
+/**
+ * Distinct events that can be emitted for a single physical "screen leave"
+ * (e.g. pressing Home / switching apps fires blur + visibilitychange together).
+ * Only one accepted violation should be counted within a short window regardless
+ * of which sibling event the browser reports first.
+ */
+export const SCREEN_LEAVE_FAMILY: MalpracticeEvent[] = ['EXAM_SCREEN_HIDDEN', 'WINDOW_BLUR'];
 
 export const MINOR_VIOLATION_LIMIT = 3;
 

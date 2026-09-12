@@ -16,6 +16,9 @@ import type { AttemptDto, CandidateQuestion, MalpracticeEvent, OptionKey, Questi
 
 const OPTION_KEYS: OptionKey[] = ['A', 'B', 'C', 'D'];
 
+/** Coalesce blur + visibilitychange + pagehide that fire for ONE physical screen-leave. */
+const SCREEN_EXIT_COALESCE_MS = 1500;
+
 function fmt(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
@@ -41,6 +44,9 @@ export default function Test() {
   const expiryRef = useRef<number>(0);
   const submittingRef = useRef(false);
   const lastViolationRef = useRef<{ type: MalpracticeEvent; at: number }>({ type: 'TAB_SWITCH', at: 0 });
+  const screenLeaveAtRef = useRef(0);
+  const fullscreenActiveRef = useRef(false);
+  const lastForbiddenKeyAtRef = useRef(0);
 
   /* ── boot: resume or start, then load questions ───────── */
   useEffect(() => {
@@ -122,6 +128,9 @@ export default function Test() {
         } else if (res.message) {
           setBanner(res.message);
           setTimeout(() => setBanner(''), 5000);
+        } else if (type === 'EXAM_SCREEN_HIDDEN' || type === 'WINDOW_BLUR') {
+          setBanner('Examination screen was left.');
+          setTimeout(() => setBanner(''), 5000);
         } else if (type === 'TAB_SWITCH' || type === 'FULLSCREEN_EXIT') {
           setBanner(
             `Warning: ${type === 'TAB_SWITCH' ? 'tab switch' : 'leaving fullscreen'} recorded (violation ${res.violationCount ?? '—'}).`,
@@ -138,43 +147,80 @@ export default function Test() {
   /* ── anti-cheat listeners ─────────────────────────────── */
   useEffect(() => {
     if (!loaded) return;
-    const onVisibility = () => {
-      if (document.hidden) void reportEvent('TAB_SWITCH');
+
+    /* Handles the FIRST screen-leave signal (blur/hidden/pagehide/fullscreen-exit).
+       Further signals from the same physical action are ignored within 1.5s. */
+    const consumeScreenLeave = (): boolean => {
+      const now = Date.now();
+      if (now - screenLeaveAtRef.current < SCREEN_EXIT_COALESCE_MS) return false;
+      screenLeaveAtRef.current = now;
+      return true;
     };
-    const onBlur = () => void reportEvent('WINDOW_BLUR');
+
+    const onVisibility = () => {
+      if (document.hidden && consumeScreenLeave()) void reportEvent('EXAM_SCREEN_HIDDEN');
+    };
+    const onBlur = () => {
+      if (consumeScreenLeave()) void reportEvent('WINDOW_BLUR');
+    };
+    const onPageHide = () => {
+      if (consumeScreenLeave()) void reportEvent('EXAM_SCREEN_HIDDEN');
+    };
+    const onFullscreenChange = () => {
+      const wasFullscreen = fullscreenActiveRef.current;
+      fullscreenActiveRef.current = Boolean(document.fullscreenElement);
+      if (wasFullscreen && !document.fullscreenElement && consumeScreenLeave()) {
+        void reportEvent('FULLSCREEN_EXIT');
+      }
+    };
+    const onPopState = () => {
+      window.history.pushState(null, '', window.location.href);
+      void reportEvent('NAVIGATION_ATTEMPT');
+    };
+    const onSelectStart = (e: Event) => e.preventDefault();
     const onContextMenu = (e: Event) => {
       e.preventDefault();
       void reportEvent('CONTEXT_MENU_ATTEMPT');
     };
+    /* Ctrl+C/V/X triggers keydown AND a copy/paste/cut event for one keypress —
+       skip the cloned event so one physical action counts once. */
     const onCopy = (e: Event) => {
+      if (Date.now() - lastForbiddenKeyAtRef.current < SCREEN_EXIT_COALESCE_MS) return;
       e.preventDefault();
       void reportEvent('COPY_ATTEMPT');
     };
     const onPaste = (e: Event) => {
+      if (Date.now() - lastForbiddenKeyAtRef.current < SCREEN_EXIT_COALESCE_MS) return;
       e.preventDefault();
       void reportEvent('PASTE_ATTEMPT');
     };
     const onCut = (e: Event) => {
+      if (Date.now() - lastForbiddenKeyAtRef.current < SCREEN_EXIT_COALESCE_MS) return;
       e.preventDefault();
       void reportEvent('CUT_ATTEMPT');
     };
     const onKeyDown = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase();
-      if ((e.ctrlKey || e.metaKey) && ['c', 'v', 'x', 'u', 'p', 's', 'r'].includes(k)) {
-        e.preventDefault();
-        void reportEvent('SHORTCUT_ATTEMPT');
+      const restricted =
+        ((e.ctrlKey || e.metaKey) && ['c', 'v', 'x', 'u', 'p', 's', 'r'].includes(k)) ||
+        k === 'f12' ||
+        ((e.ctrlKey || e.metaKey) && e.shiftKey && ['i', 'j', 'c'].includes(k));
+      if (!restricted) {
+        if (k === 'f5') e.preventDefault();
         return;
       }
-      if (k === 'f12' || ((e.ctrlKey || e.metaKey) && e.shiftKey && ['i', 'j', 'c'].includes(k))) {
-        e.preventDefault();
-        void reportEvent('SHORTCUT_ATTEMPT');
-        return;
-      }
-      if (k === 'f5') e.preventDefault();
+      if (e.repeat) return; /* held key: count once */
+      e.preventDefault();
+      lastForbiddenKeyAtRef.current = Date.now();
+      void reportEvent('SHORTCUT_ATTEMPT');
     };
 
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('blur', onBlur);
+    window.addEventListener('pagehide', onPageHide);
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    window.addEventListener('popstate', onPopState);
+    document.addEventListener('selectstart', onSelectStart);
     document.addEventListener('contextmenu', onContextMenu);
     document.addEventListener('copy', onCopy);
     document.addEventListener('paste', onPaste);
@@ -183,6 +229,10 @@ export default function Test() {
     return () => {
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('blur', onBlur);
+      window.removeEventListener('pagehide', onPageHide);
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      window.removeEventListener('popstate', onPopState);
+      document.removeEventListener('selectstart', onSelectStart);
       document.removeEventListener('contextmenu', onContextMenu);
       document.removeEventListener('copy', onCopy);
       document.removeEventListener('paste', onPaste);

@@ -236,7 +236,7 @@ describe('Malpractice', () => {
     expect(res.body.data.terminated).toBe(true);
     expect(res.body.data.status).toBe('TERMINATED');
     expect(res.body.data.minorViolationCount).toBe(3);
-    expect(res.body.data.message).toMatch(/terminated because three minor violations/);
+    expect(res.body.data.message).toMatch(/EXAMINATION TERMINATED/);
 
     const db = await ExamAttempt.findOne({});
     expect(db!.status).toBe('TERMINATED');
@@ -274,14 +274,62 @@ describe('Malpractice', () => {
     expect(db!.status).toBe('ACTIVE');
   });
 
-  it('WINDOW_BLUR does not increment the minor violation counter', async () => {
+  it('increments the minor counter for WINDOW_BLUR', async () => {
     await seedCandidate();
     const jar = await candidateLogin(app);
     await request(app).post('/api/exam/start').set('Cookie', jar);
     const res = await request(app).post('/api/exam/violation').set('Cookie', jar).send({ eventType: 'WINDOW_BLUR', questionNumber: 1, metadata: {} });
-    expect(res.body.data.minorViolationCount).toBe(0);
+    expect(res.body.data.minorViolationCount).toBe(1);
+    expect(res.body.data.status).toBe('WARNING');
+    expect(res.body.data.message).toMatch(/Warning 1 of 3/);
     expect(res.body.data.terminated).toBe(false);
     expect((await ExamAttempt.findOne({}))!.status).toBe('ACTIVE');
+  });
+
+  it('counts EXAM_SCREEN_HIDDEN and NAVIGATION_ATTEMPT as minors', async () => {
+    await seedCandidate();
+    const jar = await candidateLogin(app);
+    await request(app).post('/api/exam/start').set('Cookie', jar);
+
+    const hidden = await request(app).post('/api/exam/violation').set('Cookie', jar).send({ eventType: 'EXAM_SCREEN_HIDDEN', questionNumber: 1, metadata: {} });
+    expect(hidden.body.data.minorViolationCount).toBe(1);
+    expect(hidden.body.data.message).toMatch(/Warning 1 of 3/);
+
+    const nav = await request(app).post('/api/exam/violation').set('Cookie', jar).send({ eventType: 'NAVIGATION_ATTEMPT', questionNumber: 2, metadata: {} });
+    expect(nav.body.data.minorViolationCount).toBe(2);
+    expect((await ExamAttempt.findOne({}))!).toMatchObject({ minorViolationCount: 2, status: 'ACTIVE' });
+  });
+
+  it('counts blur + hidden from one physical screen-leave only once (cross-type dedup)', async () => {
+    await seedCandidate();
+    const jar = await candidateLogin(app);
+    await request(app).post('/api/exam/start').set('Cookie', jar);
+    const hidden = await request(app).post('/api/exam/violation').set('Cookie', jar).send({ eventType: 'EXAM_SCREEN_HIDDEN', questionNumber: 1, metadata: {} });
+    expect(hidden.body.data.minorViolationCount).toBe(1);
+    const blur = await request(app).post('/api/exam/violation').set('Cookie', jar).send({ eventType: 'WINDOW_BLUR', questionNumber: 1, metadata: {} });
+    expect(blur.body.data.minorViolationCount).toBe(1);
+    expect((await ExamAttempt.findOne({}))!).toMatchObject({ minorViolationCount: 1, status: 'ACTIVE' });
+  });
+
+  it('rejects answer / review / position updates after termination with a terminated message', async () => {
+    await seedCandidate();
+    const jar = await candidateLogin(app);
+    await request(app).post('/api/exam/start').set('Cookie', jar);
+    const qs = await request(app).get('/api/exam/questions').set('Cookie', jar);
+    const q = qs.body.data.questions[0];
+    await request(app).put('/api/exam/answer').set('Cookie', jar).send({ questionId: q._id, selectedAnswer: 'B', questionNumber: q.questionNumber, clear: false });
+
+    await request(app).post('/api/exam/violation').set('Cookie', jar).send({ eventType: 'EXAM_SCREEN_HIDDEN', questionNumber: 1, metadata: {} });
+    await request(app).post('/api/exam/violation').set('Cookie', jar).send({ eventType: 'NAVIGATION_ATTEMPT', questionNumber: 2, metadata: {} });
+    const third = await request(app).post('/api/exam/violation').set('Cookie', jar).send({ eventType: 'CONTEXT_MENU_ATTEMPT', questionNumber: 3, metadata: {} });
+    expect(third.body.data.terminated).toBe(true);
+
+    const err = await request(app).put('/api/exam/answer').set('Cookie', jar).send({ questionId: q._id, selectedAnswer: 'B', questionNumber: q.questionNumber, clear: false });
+    expect(err.status).toBe(400);
+    expect(err.body.message).toBe('Examination has been terminated.');
+    const db = await ExamAttempt.findOne({});
+    expect(db!.status).toBe('TERMINATED');
+    expect(db!.answers.find((a: { question: string }) => String(a.question) === String(q._id))?.selectedAnswer).toBe('B');
   });
 
   it('prevents duplicate active exam (multiple login protection)', async () => {

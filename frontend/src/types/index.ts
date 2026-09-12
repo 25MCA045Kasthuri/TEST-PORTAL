@@ -20,6 +20,8 @@ export type MalpracticeEvent =
   | 'CUT_ATTEMPT'
   | 'CONTEXT_MENU_ATTEMPT'
   | 'SHORTCUT_ATTEMPT'
+  | 'EXAM_SCREEN_HIDDEN'
+  | 'NAVIGATION_ATTEMPT'
   | 'MULTIPLE_LOGIN_ATTEMPT';
 
 export interface ApiEnvelope<T> {

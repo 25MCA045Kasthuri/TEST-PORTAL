@@ -7,6 +7,7 @@ import {
   MAJOR_EVENTS,
   MINOR_VIOLATION_EVENTS,
   MINOR_VIOLATION_LIMIT,
+  SCREEN_LEAVE_FAMILY,
   MalpracticeEvent,
 } from '../models/MalpracticeLog';
 import { getSettings } from '../models/Settings';
@@ -31,6 +32,10 @@ async function loadOwnAttempt(candidateId: string, sessionId?: string): Promise<
   if (sessionId) query.sessionId = sessionId;
   const attempt = await ExamAttempt.findOne(query);
   if (!attempt) {
+    const last = await ExamAttempt.findOne({ candidate: candidateId }).sort({ createdAt: -1 }).select('status');
+    if (last && last.status === 'TERMINATED') {
+      throw ApiError.badRequest('Examination has been terminated.');
+    }
     throw ApiError.notFound('No active examination found for this session.');
   }
   return attempt;
@@ -275,9 +280,11 @@ export const recordViolation = asyncHandler(async (req: AuthRequest, res: Respon
       }
     }
   } else if (isCountedMinor) {
+    const isScreenLeave = SCREEN_LEAVE_FAMILY.includes(eventType as MalpracticeEvent);
+    const family = isScreenLeave ? SCREEN_LEAVE_FAMILY : [eventType as MalpracticeEvent];
     const lastMinor = await MalpracticeLog.findOne({
       attempt: attempt._id,
-      eventType: eventType as MalpracticeEvent,
+      eventType: { $in: family },
     }).sort({ timestamp: -1 });
     const recentMinor = Boolean(
       lastMinor && now - new Date(lastMinor.timestamp).getTime() < MINOR_VIOLATION_DEBOUNCE_MS,
@@ -285,7 +292,18 @@ export const recordViolation = asyncHandler(async (req: AuthRequest, res: Respon
     const duplicateMinor = Boolean((metadata as { duplicate?: boolean })?.duplicate === true || recentMinor);
 
     if (!duplicateMinor) {
-      attempt.minorViolationCount += 1;
+      const updated = await ExamAttempt.findByIdAndUpdate(
+        attempt._id,
+        { $inc: { minorViolationCount: 1 } },
+        { new: true },
+      );
+      if (updated) {
+        attempt.minorViolationCount = updated.minorViolationCount;
+        attempt.malpracticeStatus = updated.malpracticeStatus;
+        attempt.violationCount = updated.violationCount;
+      } else {
+        attempt.minorViolationCount += 1;
+      }
       violationApplied = true;
       if (attempt.minorViolationCount >= MINOR_VIOLATION_LIMIT) {
         newStatus = 'TERMINATED';
@@ -322,7 +340,7 @@ export const recordViolation = asyncHandler(async (req: AuthRequest, res: Respon
       violationCount: finalized ? finalized.violationCount : attempt.violationCount,
       malpracticeStatus: 'TERMINATED',
       message: isCountedMinor
-        ? 'Your examination has been terminated because three minor violations were detected.'
+        ? 'EXAMINATION TERMINATED: Your test has been terminated after three malpractice violations.'
         : 'Maximum violations reached. Your examination has been automatically submitted.',
     });
     return;
@@ -343,7 +361,7 @@ export const recordViolation = asyncHandler(async (req: AuthRequest, res: Respon
     message: isCountedMinor
       ? attempt.minorViolationCount >= 2
         ? 'Warning 2 of 3: One more minor violation will terminate your examination.'
-        : 'Warning 1 of 3: This action is not allowed during the examination.'
+        : 'Warning 1 of 3: Leaving the examination screen or using restricted controls is prohibited.'
       : undefined,
   }, 'Event recorded.');
 });
